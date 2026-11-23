@@ -245,6 +245,18 @@ public class Bb implements Serializable {
                     are you tell them the average price of a meal.
                     """;
             this.listeRolesSysteme.add(new SelectItem(role, "Guide touristique"));
+
+            // Rôle système ajouté pour l'exercice bonus du TP 1.
+            role = """
+                    You are a revision coach for an engineering student.
+                    When the user gives you a topic, you answer in French with:
+                    1. A short summary of the topic in exactly 3 bullet points.
+                    2. One multiple-choice question (QCM) about the topic, with 4 options labeled A, B, C and D.
+                    Do not give the correct answer in this first message.
+                    When the user then answers with a letter, you tell them if the answer is correct or not,
+                    give the correct letter, and explain why in 2 or 3 sentences.
+                    """;
+            this.listeRolesSysteme.add(new SelectItem(role, "Coach de révision"));
         }
 
         return this.listeRolesSysteme;
