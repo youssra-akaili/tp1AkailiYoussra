@@ -1,7 +1,7 @@
 package ma.emsi.akailiyoussra.tp1akailiyoussra.jsf;
 
-
-import ma.emsi.akailiyoussra.tp1akailiyoussra.service.GenerateurReponse;
+import ma.emsi.akailiyoussra.tp1akailiyoussra.llm.JsonAdapterPourGemini;
+import ma.emsi.akailiyoussra.tp1akailiyoussra.llm.LlmInteraction;
 import jakarta.faces.application.FacesMessage;
 import jakarta.faces.context.FacesContext;
 import jakarta.faces.model.SelectItem;
@@ -11,6 +11,7 @@ import jakarta.inject.Named;
 
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -23,7 +24,7 @@ import java.util.List;
 public class Bb implements Serializable {
 
     /**
-     * Rôle "système" que l'on attribuera plus tard à un LLM.
+     * Rôle "système" attribué au LLM.
      * Possible d'écrire un nouveau rôle dans la liste déroulante.
      */
     private String roleSysteme;
@@ -45,7 +46,7 @@ public class Bb implements Serializable {
     private String question;
 
     /**
-     * Dernière réponse de l'API OpenAI.
+     * Dernière réponse de l'API du LLM.
      */
     private String reponse;
 
@@ -55,10 +56,26 @@ public class Bb implements Serializable {
     private StringBuilder conversation = new StringBuilder();
 
     /**
-     * Service pour modifier la question et générer la réponse.
+     * Mode debug : si true, on affiche le JSON envoyé au LLM et le JSON retourné par le LLM.
+     */
+    private boolean debug;
+
+    /**
+     * Texte JSON de la dernière requête envoyée à l'API du LLM (affiché en mode debug).
+     */
+    private String texteRequeteJson;
+
+    /**
+     * Texte JSON de la dernière réponse de l'API du LLM (affiché en mode debug).
+     */
+    private String texteReponseJson;
+
+    /**
+     * Prépare le JSON des requêtes au LLM et extrait les réponses.
+     * Garde l'historique de la conversation pour l'envoyer au LLM à chaque requête.
      */
     @Inject
-    private GenerateurReponse generateurReponse;
+    private JsonAdapterPourGemini jsonAdapter;
 
     /**
      * Contexte JSF. Utilisé pour qu'un message d'erreur s'affiche dans le formulaire.
@@ -113,11 +130,32 @@ public class Bb implements Serializable {
         this.conversation = new StringBuilder(conversation);
     }
 
+    public boolean isDebug() {
+        return debug;
+    }
+
+    public void setDebug(boolean debug) {
+        this.debug = debug;
+    }
+
+    public String getTexteRequeteJson() {
+        return texteRequeteJson;
+    }
+
+    public void setTexteRequeteJson(String texteRequeteJson) {
+        this.texteRequeteJson = texteRequeteJson;
+    }
+
+    public String getTexteReponseJson() {
+        return texteReponseJson;
+    }
+
+    public void setTexteReponseJson(String texteReponseJson) {
+        this.texteReponseJson = texteReponseJson;
+    }
+
     /**
-     * Envoie la question au serveur.
-     * En attendant de l'envoyer à un LLM, le serveur fait un traitement quelconque, juste pour tester :
-     * Le traitement consiste à copier la question en minuscules et à l'entourer avec "||". Le rôle système
-     * est ajouté au début de la première réponse.
+     * Envoie la question à l'API du LLM et récupère la réponse.
      *
      * @return null pour rester sur la même page.
      */
@@ -133,20 +171,26 @@ public class Bb implements Serializable {
             return null;
         }
 
-        // Traite la question pour construire la réponse.
-        String roleSystemePourModification = null;
         if (this.conversation.isEmpty()) {
-            // Si la conversation n'a pas encore commencé
-            roleSystemePourModification = this.roleSysteme;
-
+            // Début de la conversation : on envoie le rôle système au JsonAdapter.
+            jsonAdapter.setSystemRole(this.roleSysteme);
             // Fige la liste déroulante qui permet de choisir le rôle système
             this.roleSystemeChangeable = false;
         }
 
-        this.reponse = this.generateurReponse.genererReponse(
-                this.question,
-                roleSystemePourModification
-        );
+        try {
+            LlmInteraction interaction = jsonAdapter.envoyerRequete(question);
+            this.reponse = interaction.reponseExtraite();
+            this.texteRequeteJson = interaction.questionJson();
+            this.texteReponseJson = interaction.reponseJson();
+        } catch (Exception e) {
+            this.reponse = "Erreur : " + e.getMessage();
+            FacesMessage message =
+                    new FacesMessage(FacesMessage.SEVERITY_ERROR,
+                            "Problème de connexion avec l'API du LLM",
+                            "Problème de connexion avec l'API du LLM" + e.getMessage() + "\n" + Arrays.toString(e.getStackTrace()));
+            facesContext.addMessage(null, message);
+        }
 
         // La conversation contient l'historique des questions-réponses depuis le début.
         afficherConversation();
@@ -155,11 +199,8 @@ public class Bb implements Serializable {
 
     /**
      * Pour un nouveau chat.
-     * Termine la portée view en retournant "index" (la page index.xhtml sera affichée après le traitement
-     * effectué pour construire la réponse) et pas null. null aurait indiqué de rester dans la même page (index.xhtml)
-     * sans changer de vue.
-     * Le fait de changer de vue va faire supprimer l'instance en cours du backing bean par CDI et donc on reprend
-     * tout comme au début puisqu'une nouvelle instance du backing va être utilisée par la page index.xhtml.
+     * Termine la portée view en retournant "index" : une nouvelle instance du backing bean
+     * (et donc un nouveau JsonAdapter, sans historique) sera utilisée.
      *
      * @return "index"
      */
@@ -183,12 +224,10 @@ public class Bb implements Serializable {
             // Génère les rôles de l'API prédéfinis
             this.listeRolesSysteme = new ArrayList<>();
 
-            // Vous pouvez évidemment écrire ces rôles dans la langue que vous voulez.
             String role = """
                     You are a helpful assistant. You help the user to find the information they need.
                     If the user type a question, you answer it.
                     """;
-
             // 1er argument : la valeur du rôle, 2ème argument : le libellé du rôle
             this.listeRolesSysteme.add(new SelectItem(role, "Assistant"));
 
@@ -198,20 +237,14 @@ public class Bb implements Serializable {
                     If the user type an English text, you translate it into French.
                     If the text contains only one to three words, give some examples of usage of these words in English.
                     """;
-
-            this.listeRolesSysteme.add(
-                    new SelectItem(role, "Traducteur Anglais-Français")
-            );
+            this.listeRolesSysteme.add(new SelectItem(role, "Traducteur Anglais-Français"));
 
             role = """
                     Your are a travel guide. If the user type the name of a country or of a town,
                     you tell them what are the main places to visit in the country or the town
                     are you tell them the average price of a meal.
                     """;
-
-            this.listeRolesSysteme.add(
-                    new SelectItem(role, "Guide touristique")
-            );
+            this.listeRolesSysteme.add(new SelectItem(role, "Guide touristique"));
         }
 
         return this.listeRolesSysteme;
